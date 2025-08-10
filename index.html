@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>家計簿</title>
+<style>
+  body { font-family: sans-serif; padding: 20px; }
+  input, select, button { margin: 5px; padding: 5px; }
+</style>
+</head>
+<body>
+
+<h1>家計簿入力</h1>
+
+<form id="entryForm">
+  日付: <input type="date" id="date" required><br>
+  項目: <input type="text" id="item" required><br>
+  金額: <input type="number" id="amount" required><br>
+  種類: 
+  <select id="type">
+    <option value="食費">食費</option>
+    <option value="交通費">交通費</option>
+    <option value="娯楽">娯楽</option>
+    <option value="その他">その他</option>
+  </select><br>
+  メモ: <input type="text" id="memo"><br>
+  <button type="submit">追加</button>
+</form>
+
+<hr>
+
+<h2>記録一覧</h2>
+<table border="1" id="recordsTable">
+  <thead>
+    <tr><th>日付</th><th>項目</th><th>金額</th><th>種類</th><th>メモ</th><th>操作</th></tr>
+  </thead>
+  <tbody></tbody>
+</table>
+
+<script>
+// ★ここにあなたのApps ScriptのURLを入れる
+const SCRIPT_URL = "YOUR_SCRIPT_URL";
+
+// データ取得
+async function fetchRecords() {
+  try {
+    const res = await fetch(SCRIPT_URL);
+    const data = await res.json();
+    renderTable(data.records);
+  } catch (err) {
+    alert("データ取得に失敗しました: " + err.message);
+  }
+}
+
+// テーブル描画
+function renderTable(records) {
+  const tbody = document.querySelector("#recordsTable tbody");
+  tbody.innerHTML = "";
+  records.forEach(rec => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${rec.date}</td>
+      <td>${rec.item}</td>
+      <td>${rec.amount}</td>
+      <td>${rec.type}</td>
+      <td>${rec.memo}</td>
+      <td>
+        <button onclick="deleteRecord(${rec.rowIndex})">削除</button>
+      </td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+// 追加
+document.getElementById("entryForm").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const record = {
+    action: "add",
+    date: document.getElementById("date").value,
+    item: document.getElementById("item").value,
+    amount: parseInt(document.getElementById("amount").value, 10),
+    type: document.getElementById("type").value,
+    memo: document.getElementById("memo").value
+  };
+  try {
+    const res = await fetch(SCRIPT_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(record)
+    });
+    const result = await res.json();
+    alert(result.message);
+    fetchRecords(); // 再取得
+    e.target.reset();
+  } catch (err) {
+    alert("追加に失敗しました: " + err.message);
+  }
+});
+
+// 削除
+async function deleteRecord(rowIndex) {
+  if (!confirm("この記録を削除しますか？")) return;
+  const record = {
+    action: "delete",
+    rowIndexes: [rowIndex]
+  };
+  try {
+    const res = await fetch(SCRIPT_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(record)
+    });
+    const result = await res.json();
+    alert(result.message);
+    fetchRecords(); // 再取得
+  } catch (err) {
+    alert("削除に失敗しました: " + err.message);
+  }
+}
+
+// 初期表示
+fetchRecords();
+
+</script>
+</body>
+</html>
