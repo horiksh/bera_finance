@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ベラ会計</title>
+  <style>
+    body{font-family:system-ui, -apple-system, "Yu Gothic UI", "Hiragino Kaku Gothic ProN", 'Noto Sans JP', Arial; padding:18px;}
+    .row{display:flex; gap:8px; align-items:center}
+    input, select, textarea, button{font-size:14px; padding:6px}
+    table{width:100%; border-collapse:collapse; margin-top:12px}
+    th, td{border:1px solid #ddd; padding:6px; text-align:left}
+    .small{font-size:12px; color:#666}
+    .actions{display:flex; gap:6px}
+  </style>
+</head>
+<body>
+  <h1>ベラ会計</h1>
+
+  <section id="entry">
+    <h2>新しい記録</h2>
+    <div class="row">
+      <label>日付 <input type="date" id="date"></label>
+      <label>収支 <select id="type"><option value="収入">収入</option><option value="支出">支出</option></select></label>
+      <label>項目 <select id="preset"></select></label>
+      <label>金額 <input type="number" id="amount" step="1"></label>
+    </div>
+    <div style="margin-top:8px">
+      <textarea id="memo" rows="2" style="width:100%" placeholder="メモ"></textarea>
+    </div>
+    <div style="margin-top:8px" class="actions">
+      <button id="addBtn">追加</button>
+      <button id="copyLastBtn">過去から呼び出す</button>
+      <label class="small">表示年度開始月: <select id="startMonth"></select></label>
+    </div>
+  </section>
+
+  <section id="search" style="margin-top:18px">
+    <h2>検索 / 過去の記録</h2>
+    <div class="row">
+      <input id="q" placeholder="キーワード検索（項目・メモなど）" style="flex:1">
+      <select id="filterType"><option value="all">全て</option><option value="収入">収入</option><option value="支出">支出</option></select>
+      <button id="searchBtn">検索</button>
+      <button id="refreshBtn">最新</button>
+      <button id="deleteSelected">選択を削除</button>
+      <button id="sumSelected">選択で集計</button>
+    </div>
+
+    <table id="recordsTable">
+      <thead>
+        <tr><th><input type="checkbox" id="selectAll"></th><th>ID</th><th>日付</th><th>収支</th><th>項目</th><th>金額</th><th>メモ</th><th>操作</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <section id="summary" style="margin-top:18px">
+    <h2>年度集計</h2>
+    <div class="row">
+      <label>年度の開始月<select id="summaryMonth"></select></label>
+      <label>西暦年<input id="summaryYear" type="number" value="2025"></label>
+      <button id="calcSummary">集計</button>
+    </div>
+    <div id="summaryResult" style="margin-top:8px"></div>
+  </section>
+
+<script>
+// Client-side controller
+const presets = {
+  income: [
+    '施設費','印刷など','生活費','飯の場','保険料','新人/現役支援'
+  ],
+  expense: [
+    '宿泊費徴収','生活費徴収','飯の場','師範部屋より徴収/補助','日比谷高校払い','星陵会補助費','一水会会計補助費'
+  ]
+};
+
+function populatePresets(type){
+  const sel = document.getElementById('preset');
+  sel.innerHTML='';
+  const list = type==='収入' ? presets.income : presets.expense;
+  list.forEach(p=>{const o=document.createElement('option'); o.value=p; o.textContent=p; sel.appendChild(o)});
+}
+
+document.getElementById('type').addEventListener('change', e=> populatePresets(e.target.value));
+
+// populate months
+for(let m=1;m<=12;m++){const o=document.createElement('option'); o.value=m; o.textContent=m; document.getElementById('startMonth').appendChild(o); document.getElementById('summaryMonth').appendChild(o)}
+
+populatePresets('収入');
+
+// buttons
+const addBtn = document.getElementById('addBtn');
+addBtn.addEventListener('click', ()=>{
+  const date = document.getElementById('date').value;
+  const type = document.getElementById('type').value;
+  const item = document.getElementById('preset').value;
+  const amount = Number(document.getElementById('amount').value || 0);
+  const memo = document.getElementById('memo').value;
+  if(!date || !item || !amount){alert('日付・項目・金額は必須です'); return}
+  const record = {date, type, item, amount, memo};
+  google.script.run.withSuccessHandler(res=>{alert('保存しました'); refresh();}).addRecord(record);
+});
+
+document.getElementById('refreshBtn').addEventListener('click', refresh);
+document.getElementById('searchBtn').addEventListener('click', ()=>refresh());
+
+function refresh(){
+  const q = document.getElementById('q').value;
+  const type = document.getElementById('filterType').value;
+  google.script.run.withSuccessHandler(renderTable).getRecords({q,type});
+}
+
+function renderTable(rows){
+  const tbody = document.querySelector('#recordsTable tbody'); tbody.innerHTML='';
+  rows.forEach(r=>{
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td><input type="checkbox" data-id="${r.id}"></td>
+      <td>${r.id}</td>
+      <td>${r.date}</td>
+      <td>${r.type}</td>
+      <td>${r.item}</td>
+      <td>${r.amount}</td>
+      <td>${r.memo||''}</td>
+      <td>
+        <button data-id="${r.id}" class="dup">複製</button>
+        <button data-id="${r.id}" class="edit">編集</button>
+      </td>`;
+    tbody.appendChild(tr);
+  });
+  // attach events
+  tbody.querySelectorAll('.dup').forEach(b=>b.addEventListener('click', e=>{ const id=e.target.dataset.id; google.script.run.withSuccessHandler(()=>{alert('複製して追加しました'); refresh();}).duplicateRecord(id); }));
+  tbody.querySelectorAll('.edit').forEach(b=>b.addEventListener('click', e=>{ const id=e.target.dataset.id; onEdit(id); }));
+}
+
+function onEdit(id){
+  // get single record then fill form (for brevity reusing getRecords filter)
+  google.script.run.withSuccessHandler(rows=>{
+    const r = rows.find(x=>x.id===id);
+    if(!r) return alert('見つかりません');
+    document.getElementById('date').value = r.date;
+    document.getElementById('type').value = r.type; populatePresets(r.type);
+    document.getElementById('preset').value = r.item;
+    document.getElementById('amount').value = r.amount;
+    document.getElementById('memo').value = r.memo || '';
+    // change add button to save
+    addBtn.textContent='更新';
+    addBtn.onclick = ()=>{
+      const upd = {date:document.getElementById('date').value, type:document.getElementById('type').value, item:document.getElementById('preset').value, amount:Number(document.getElementById('amount').value||0), memo:document.getElementById('memo').value};
+      google.script.run.withSuccessHandler(()=>{alert('更新しました'); addBtn.textContent='追加'; addBtn.onclick=null; addBtn.addEventListener('click', ()=>{}); refresh();}).updateRecord(id, upd);
+    };
+  }).getRecords({q:id,type:'all'});
+}
+
+// select all
+document.getElementById('selectAll').addEventListener('change', e=>{
+  document.querySelectorAll('#recordsTable tbody input[type=checkbox]').forEach(cb=>cb.checked = e.target.checked);
+});
+
+// delete selected
+document.getElementById('deleteSelected').addEventListener('click', ()=>{
+  const ids = Array.from(document.querySelectorAll('#recordsTable tbody input[type=checkbox]:checked')).map(cb=>cb.dataset.id);
+  if(!ids.length) return alert('選択してください');
+  if(!confirm(ids.length + ' 件を削除しますか？')) return;
+  google.script.run.withSuccessHandler(()=>{alert('削除しました'); refresh();}).deleteRecords(ids);
+});
+
+// sum selected
+document.getElementById('sumSelected').addEventListener('click', ()=>{
+  const rows = Array.from(document.querySelectorAll('#recordsTable tbody input[type=checkbox]:checked')).map(cb=>{
+    const tr = cb.closest('tr'); return {type:tr.children[3].textContent, amount:Number(tr.children[5].textContent)};
+  });
+  if(!rows.length) return alert('選択してください');
+  const income = rows.filter(r=>r.type==='収入').reduce((s,r)=>s+r.amount,0);
+  const expense = rows.filter(r=>r.type==='支出').reduce((s,r)=>s+r.amount,0);
+  alert('選択集計 — 収入: ' + income + ' 支出: ' + expense + ' 差引: ' + (income-expense));
+});
+
+// duplicate from past quick-pick
+document.getElementById('copyLastBtn').addEventListener('click', ()=>{
+  const q = prompt('過去のキーワードで検索して複製します。キーワードを入力:');
+  if(!q) return;
+  google.script.run.withSuccessHandler(rows=>{
+    if(!rows.length) return alert('該当なし');
+    // choose first
+    const r = rows[0];
+    document.getElementById('date').value = new Date().toISOString().slice(0,10);
+    document.getElementById('type').value = r.type; populatePresets(r.type);
+    document.getElementById('preset').value = r.item;
+    document.getElementById('amount').value = r.amount;
+    document.getElementById('memo').value = r.memo||'';
+  }).getRecords({q,type:'all'});
+});
+
+// summary
+document.getElementById('calcSummary').addEventListener('click', ()=>{
+  const year = Number(document.getElementById('summaryYear').value);
+  const startMonth = Number(document.getElementById('summaryMonth').value);
+  google.script.run.withSuccessHandler(showSummary).getSummaryYear({year,startMonth});
+});
+
+function showSummary(obj){
+  const el = document.getElementById('summaryResult');
+  el.innerHTML = `<div class="small">年度: ${obj.label} — 収入 ${obj.income} / 支出 ${obj.expense} / 残高 ${obj.balance}</div>`;
+  let html = '<table><thead><tr><th>項目</th><th>収入</th><th>支出</th></tr></thead><tbody>';
+  for(const k of Object.keys(obj.byItem)){
+    html += `<tr><td>${k}</td><td>${obj.byItem[k].income||0}</td><td>${obj.byItem[k].expense||0}</td></tr>`;
+  }
+  html += '</tbody></table>';
+  el.innerHTML += html;
+}
+
+// initial load
+(function init(){
+  // default date to today
+  document.getElementById('date').value = new Date().toISOString().slice(0,10);
+  // default months
+  document.getElementById('startMonth').value = 10; // user example
+  document.getElementById('summaryMonth').value = 10;
+  // load records
+  refresh();
+})();
+</script>
+</body>
+</html>
